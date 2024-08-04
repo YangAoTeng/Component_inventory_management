@@ -1,6 +1,7 @@
 import sqlite3
-from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QTextEdit, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, QComboBox, QGridLayout, QSizePolicy
+from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QTextEdit, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, QComboBox, QGridLayout, QSizePolicy,QFileDialog
 from PySide6.QtGui import QColor
+import pandas as pd
 
 # 连接到SQLite数据库（如果数据库不存在，则会创建一个）
 conn = sqlite3.connect('inventory.db')
@@ -107,13 +108,22 @@ class InventoryApp(QWidget):
         self.delete_button = QPushButton("删除")
         self.delete_button.setStyleSheet("background-color: lightcoral;")
         self.delete_button.clicked.connect(self.delete_item)
+        self.import_button = QPushButton("导入Excel")
+        self.import_button.setStyleSheet("background-color: lightyellow;")
+        self.import_button.clicked.connect(self.import_excel)
+
+        self.export_button = QPushButton("导出Excel")
+        self.export_button.setStyleSheet("background-color: lightgrey;")
+        self.export_button.clicked.connect(self.export_table_data)
         
         # 将按钮单独放在一行
         button_layout = QHBoxLayout()
         button_layout.addWidget(self.add_button)
         button_layout.addWidget(self.clear_button)
         button_layout.addWidget(self.delete_button)
-        
+        button_layout.addWidget(self.import_button)
+        button_layout.addWidget(self.export_button)
+
         self.input_layout.addLayout(button_layout, (len(self.fields) // 3 + 1) * 2, 0, 1, 3)
         
         self.form_layout.addLayout(self.input_layout)
@@ -122,11 +132,21 @@ class InventoryApp(QWidget):
         self.search_layout = QHBoxLayout()
         self.search_input = QLineEdit()
         self.search_button = QPushButton("查找")
+
+        # 设置按钮样式
+        self.search_button.setStyleSheet("background-color: lightblue;")
+        self.search_button.setMinimumWidth(100)  # 设置按钮最小宽度
+
+        # 连接查找按钮的点击事件
         self.search_button.clicked.connect(self.search_item)
+
+        # 连接输入框的文本变化事件
+        self.search_input.textChanged.connect(self.search_item)
+
         self.search_layout.addWidget(QLabel("查找器件:"))
         self.search_layout.addWidget(self.search_input)
         self.search_layout.addWidget(self.search_button)
-        
+
         self.form_layout.addLayout(self.search_layout)
         
         # 设置容器的最大高度
@@ -159,6 +179,93 @@ class InventoryApp(QWidget):
         for name in names:
             combobox.addItem(name[0])
         conn.close()
+    
+
+    def import_excel(self):
+        try:
+            # 打开文件对话框选择Excel文件
+            file_path, _ = QFileDialog.getOpenFileName(self, "选择Excel文件", "", "Excel Files (*.xlsx *.xls)")
+            if file_path:
+                # 使用Pandas读取Excel文件
+                df = pd.read_excel(file_path)
+                
+                # 预期的列名（不包括自动生成的code列）
+                expected_columns = [ '器件名称', '器件型号', '封装', '购买价格', '数量', '剩余数量', '存储位置', '购买链接', '需求项目', '备注']
+                
+                # 检查Excel文件的列名是否匹配
+                if not all(column in df.columns for column in expected_columns):
+                    QMessageBox.warning(self, "错误", "Excel文件的列名不匹配，请检查文件格式。")
+                    return
+                
+                # 连接到SQLite数据库
+                conn = sqlite3.connect('inventory.db')
+                cursor = conn.cursor()
+                
+                # 获取当前最大的code值
+                cursor.execute('SELECT MAX(code) FROM items')
+                max_code = cursor.fetchone()[0]
+                next_code = (max_code + 1) if max_code is not None else 1
+                
+                # 查重并过滤重复的器件
+                duplicate_count = 0
+                duplicate_items = []
+                for index, row in df.iterrows():
+                    cursor.execute('''
+                    SELECT COUNT(*) FROM items WHERE name = ? AND model = ? AND package = ?
+                    ''', (row['器件名称'], row['器件型号'], row['封装']))
+                    if cursor.fetchone()[0] > 0:
+                        duplicate_count += 1
+                        duplicate_items.append((row['器件名称'], row['器件型号'], row['封装']))
+                        continue
+                    
+                    cursor.execute('''
+                    INSERT INTO items (code, name, model, package, purchase_price, quantity, remaining_quantity, storage_location, purchase_link, project, notes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        next_code, row['器件名称'], row['器件型号'], row['封装'], row['购买价格'], row['数量'], row['剩余数量'], row['存储位置'], row['购买链接'], row['需求项目'], row['备注']
+                    ))
+                    next_code += 1
+                
+                # 提交更改并关闭连接
+                conn.commit()
+                conn.close()
+                self.load_data()
+                
+                # 构建重复器件信息字符串
+                duplicate_info = "\n".join([f"名称: {item[0]}, 型号: {item[1]}, 封装: {item[2]}" for item in duplicate_items])
+                QMessageBox.information(self, "成功", f"数据已成功导入！有 {duplicate_count} 个器件重复，已被过滤。\n\n重复的器件:\n{duplicate_info}")
+        except Exception as e:
+            QMessageBox.critical(self, "导入失败", f"导入过程中发生错误: {str(e)}")
+
+    def export_table_data(self):
+        try:
+            # 打开文件对话框选择导出文件路径
+            file_path, _ = QFileDialog.getSaveFileName(self, "导出为Excel文件", "", "Excel Files (*.xlsx *.xls)")
+            if file_path:
+                # 获取表格内容
+                rows = self.table.rowCount()
+                columns = self.table.columnCount()
+                data = []
+                for row in range(rows):
+                    row_data = []
+                    for column in range(columns):
+                        item = self.table.item(row, column)
+                        row_data.append(item.text() if item is not None else "")
+                    data.append(row_data)
+                
+                # 获取表头
+                headers = []
+                for column in range(columns):
+                    header_item = self.table.horizontalHeaderItem(column)
+                    headers.append(header_item.text() if header_item is not None else "")
+                
+                # 创建DataFrame并写入Excel文件
+                df = pd.DataFrame(data, columns=headers)
+                df.to_excel(file_path, index=False)
+                
+                QMessageBox.information(self, "成功", "数据已成功导出！")
+        except Exception as e:
+            QMessageBox.critical(self, "导出失败", f"导出过程中发生错误: {str(e)}")
     
     def populate_storage_location_combobox(self, combobox, name):
         combobox.clear()
@@ -336,7 +443,7 @@ class InventoryApp(QWidget):
             rows = cursor.fetchall()
             
             if not rows:
-                QMessageBox.information(self, "查找结果", "查找不到该器件！")
+                # QMessageBox.information(self, "查找结果", "查找不到该器件！")
                 cursor.execute("SELECT * FROM items")
                 rows = cursor.fetchall()
             

@@ -2,6 +2,7 @@ import sqlite3
 from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QTextEdit, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, QComboBox, QGridLayout, QSizePolicy,QFileDialog
 from PySide6.QtGui import QColor
 import pandas as pd
+from PySide6.QtCore import QTimer
 
 # 连接到SQLite数据库（如果数据库不存在，则会创建一个）
 conn = sqlite3.connect('inventory.db')
@@ -137,11 +138,19 @@ class InventoryApp(QWidget):
         self.search_button.setStyleSheet("background-color: lightblue;")
         self.search_button.setMinimumWidth(100)  # 设置按钮最小宽度
 
+        # 初始化定时器
+        self.search_timer = QTimer()
+        self.search_timer.setInterval(500)  # 设置定时器间隔为1秒
+        self.search_timer.setSingleShot(True)  # 设置为单次触发
+
         # 连接查找按钮的点击事件
         self.search_button.clicked.connect(self.search_item)
 
-        # 连接输入框的文本变化事件
-        self.search_input.textChanged.connect(self.search_item)
+        # 连接定时器的超时信号到搜索函数
+        self.search_timer.timeout.connect(self.search_item)
+
+        # 连接输入框的文本变化事件到定时器启动函数
+        self.search_input.textChanged.connect(self.on_text_changed)
 
         self.search_layout.addWidget(QLabel("查找器件:"))
         self.search_layout.addWidget(self.search_input)
@@ -179,6 +188,10 @@ class InventoryApp(QWidget):
         for name in names:
             combobox.addItem(name[0])
         conn.close()
+
+    def on_text_changed(self):
+        # 每次文本变化时重新启动定时器
+        self.search_timer.start()
     
 
     def import_excel(self):

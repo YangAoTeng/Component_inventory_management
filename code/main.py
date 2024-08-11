@@ -1,8 +1,8 @@
 import sqlite3
 from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QTextEdit, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, QComboBox, QGridLayout, QSizePolicy,QFileDialog
 from PySide6.QtGui import QColor
-import pandas as pd
 from PySide6.QtCore import QTimer
+from openpyxl import load_workbook,Workbook
 
 # 连接到SQLite数据库（如果数据库不存在，则会创建一个）
 conn = sqlite3.connect('inventory.db')
@@ -199,14 +199,18 @@ class InventoryApp(QWidget):
             # 打开文件对话框选择Excel文件
             file_path, _ = QFileDialog.getOpenFileName(self, "选择Excel文件", "", "Excel Files (*.xlsx *.xls)")
             if file_path:
-                # 使用Pandas读取Excel文件
-                df = pd.read_excel(file_path)
+                # 使用openpyxl读取Excel文件
+                workbook = load_workbook(file_path)
+                sheet = workbook.active
                 
                 # 预期的列名（不包括自动生成的code列）
-                expected_columns = [ '器件名称', '器件型号', '封装', '购买价格', '数量', '剩余数量', '存储位置', '购买链接', '需求项目', '备注']
+                expected_columns = ['器件名称', '器件型号', '封装', '购买价格', '数量', '剩余数量', '存储位置', '购买链接', '需求项目', '备注']
+                
+                # 获取Excel文件的列名
+                excel_columns = [cell.value for cell in sheet[1]]
                 
                 # 检查Excel文件的列名是否匹配
-                if not all(column in df.columns for column in expected_columns):
+                if not all(column in excel_columns for column in expected_columns):
                     QMessageBox.warning(self, "错误", "Excel文件的列名不匹配，请检查文件格式。")
                     return
                 
@@ -222,23 +226,23 @@ class InventoryApp(QWidget):
                 # 查重并过滤重复的器件
                 duplicate_count = 0
                 duplicate_items = []
-                for index, row in df.iterrows():
+                for row in sheet.iter_rows(min_row=2, values_only=True):
+                    item_data = dict(zip(excel_columns, row))
                     cursor.execute('''
                     SELECT COUNT(*) FROM items WHERE name = ? AND model = ? AND package = ?
-                    ''', (row['器件名称'], row['器件型号'], row['封装']))
+                    ''', (item_data['器件名称'], item_data['器件型号'], item_data['封装']))
                     if cursor.fetchone()[0] > 0:
                         duplicate_count += 1
-                        duplicate_items.append((row['器件名称'], row['器件型号'], row['封装']))
+                        duplicate_items.append((item_data['器件名称'], item_data['器件型号'], item_data['封装']))
                         continue
                     
                     cursor.execute('''
                     INSERT INTO items (code, name, model, package, purchase_price, quantity, remaining_quantity, storage_location, purchase_link, project, notes)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
-                        next_code, row['器件名称'], row['器件型号'], row['封装'], row['购买价格'], row['数量'], row['剩余数量'], row['存储位置'], row['购买链接'], row['需求项目'], row['备注']
+                        next_code, item_data['器件名称'], item_data['器件型号'], item_data['封装'], item_data['购买价格'], item_data['数量'], item_data['剩余数量'], item_data['存储位置'], item_data['购买链接'], item_data['需求项目'], item_data['备注']
                     ))
                     next_code += 1
-                
                 # 提交更改并关闭连接
                 conn.commit()
                 conn.close()
@@ -272,9 +276,19 @@ class InventoryApp(QWidget):
                     header_item = self.table.horizontalHeaderItem(column)
                     headers.append(header_item.text() if header_item is not None else "")
                 
-                # 创建DataFrame并写入Excel文件
-                df = pd.DataFrame(data, columns=headers)
-                df.to_excel(file_path, index=False)
+                # 创建Workbook并写入Excel文件
+                workbook = Workbook()
+                sheet = workbook.active
+                
+                # 写入表头
+                sheet.append(headers)
+                
+                # 写入数据
+                for row_data in data:
+                    sheet.append(row_data)
+                
+                # 保存Excel文件
+                workbook.save(file_path)
                 
                 QMessageBox.information(self, "成功", "数据已成功导出！")
         except Exception as e:
